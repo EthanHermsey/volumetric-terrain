@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - volumetric terrain</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link rel="stylesheet" href="style.css">
+		<script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+        <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.155.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.155.0/examples/jsm/",
+                "volumetric-terrain": "./volumetric-terrain/VolumetricTerrain.js"
+            }
+        }
+        </script>        
+	</head>
+	<body>		
+        <button id="start">start</button>
+        <script defer type="module">
+
+            import * as THREE from 'three';
+            import VolumetricTerrain from 'volumetric-terrain';
+
+            let camera, shadowLight, shadowLightOffset, scene, renderer, raycaster, terrainController;
+            let shadowLightMoveCount = 0;
+
+            const keys = {
+                add: ( e ) => {
+
+                    keys[ e.code ] = true;
+
+                },
+                remove: ( e ) => delete keys[ e.code ]
+            };
+
+            const mouse = {
+                pressed: false,
+                button: undefined,
+                press: ( e ) => {
+
+                    mouse.pressed = true;
+                    mouse.button = e.button;
+
+                },
+                up: () => mouse.pressed = false
+            };
+
+            init();
+            render();
+
+            function init() {
+
+                raycaster = new THREE.Raycaster();
+
+                renderer = new THREE.WebGLRenderer( { antialias: true } );
+                renderer.LegacyLights = true;
+                renderer.outputColorSpace = 'srgb';
+                renderer.toneMapping = THREE.ReinhardToneMapping;
+                renderer.toneMappingExposure = 2.0;
+                renderer.shadowMap.enabled = true;
+                renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                renderer.setSize( window.innerWidth, window.innerHeight );
+                document.body.appendChild( renderer.domElement );
+
+                scene = new THREE.Scene();
+
+                camera = new THREE.PerspectiveCamera( 65, window.innerWidth / window.innerHeight, 0.1, 10000 );
+                camera.rotation.order = "YXZ";
+                camera.position.set( 0, 750, 0 );
+                camera.lookAt( new THREE.Vector3( 0, 700, -50 ) );
+
+                //lights
+                let amb = new THREE.AmbientLight( "rgb(240,240,240)", 1 );
+                scene.add( amb );
+
+
+                const shadowLightIntensity = 1.2;
+                shadowLightOffset = new THREE.Vector3( 160, 80, 0 ).multiplyScalar( 5 );
+                shadowLight = new THREE.DirectionalLight( 0xffffff, shadowLightIntensity );
+
+                shadowLight.target = new THREE.Object3D();
+                scene.add( shadowLight.target );
+
+                shadowLight.position.copy( camera.position ).add( shadowLightOffset );
+                shadowLight.target.position.copy( camera.position );
+
+                shadowLight.castShadow = true;
+                shadowLight.shadow.mapSize.width = 1024;
+                shadowLight.shadow.mapSize.height = 1024;
+                shadowLight.shadow.camera.near = 1;
+                shadowLight.shadow.camera.far = 800;
+                shadowLight.shadow.camera.top = - 1000;
+                shadowLight.shadow.camera.bottom = 1000;
+                shadowLight.shadow.camera.left = - 1000;
+                shadowLight.shadow.camera.right = 1000;
+                shadowLight.shadow.bias = - 0.002;
+                scene.add( shadowLight );
+
+                //add events
+                window.addEventListener( 'resize', onWindowResize );
+                document.getElementById( 'start' ).addEventListener( 'click', start );
+
+                // ################################
+                // Volumetric Terrain controller ##
+                // ################################  
+                terrainController = new VolumetricTerrain(
+                    {
+                        scene: scene,
+                        gridSize: { x: 16, y: 256, z: 16 },
+                        terrainScale: { x: 5, y: 5, z: 5 },
+                        viewDistance: 6, //radius
+                        fps: 24,
+                        material: new THREE.MeshNormalMaterial()
+                    },
+                    ()=>{}
+                );
+                scene.add( terrainController );
+
+            }
+
+            function start() {
+
+                renderer.domElement.requestPointerLock();
+                renderer.domElement.requestFullscreen();
+
+                renderer.domElement.addEventListener( 'fullscreenchange', () => {
+
+                    if ( ! document.fullscreenElement ) stop();
+
+                } );
+                renderer.domElement.addEventListener( 'mousemove', rotateCamera );
+
+                document.addEventListener( 'blur', stop );
+                document.addEventListener( 'keydown', keys.add );
+                document.addEventListener( 'keyup', keys.remove );
+                document.addEventListener( 'mousedown', mouse.press );
+                document.addEventListener( 'mouseup', mouse.up );
+                
+                document.getElementById( 'start' ).style.display = 'none';
+
+                // ##############################################################
+                // calls terrainControll.update( camera.position ) on interval ##
+                // ##############################################################
+                terrainController.toggleClock( true, camera.position ); 
+
+            }
+
+            function stop() {
+
+                document.exitPointerLock();
+
+                renderer.domElement.removeEventListener( 'mousemove', rotateCamera );
+                document.removeEventListener( 'blur', stop );
+                document.removeEventListener( 'keydown', keys.add );
+                document.removeEventListener( 'keyup', keys.remove );
+                document.removeEventListener( 'mousedown', mouse.press );
+                document.removeEventListener( 'mouseup', mouse.up );
+                
+                document.getElementById( 'start' ).style.display = 'block';
+
+                // ########################################
+                // stops terrainControll.update interval ##
+                // ########################################
+                terrainController.toggleClock( false );
+
+            }
+
+            function render() {
+
+                requestAnimationFrame( render );
+
+                translateCamera();
+
+                if ( mouse.pressed ) adjustTerrain();
+
+                if ( shadowLightMoveCount ++ >= 400 ) {
+
+                    shadowLight.position.copy( camera.position ).add( shadowLightOffset );
+                    shadowLight.target.position.copy( camera.position );
+                    shadowLightMoveCount = 0;
+
+                }
+
+                renderer.render( scene, camera );
+
+            }
+
+            function onWindowResize() {
+
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize( window.innerWidth, window.innerHeight );
+                render();
+
+            }
+
+            function rotateCamera( e ) {
+
+                camera.rotateY( e.movementX * - 0.002 );
+                camera.rotateX( e.movementY * - 0.002 );
+
+                camera.rotation.x = Math.min( camera.rotation.x, 1.35 );
+                camera.rotation.x = Math.max( camera.rotation.x, - 1.1 );
+                camera.rotation.z = 0;
+
+            }
+
+            function translateCamera() {
+
+                const direction = new THREE.Vector3();
+                direction.x = keys.KeyA ? - 1 : keys.KeyD ? 1 : 0;
+                direction.z = keys.KeyW ? - 1 : keys.KeyS ? 1 : 0;
+                direction.y = keys.ShiftLeft ? - 1 : keys.Space ? 1 : 0;                
+
+                if ( direction.length() > 0 ){
+                    
+                    direction.setLength( 0.2 );
+                    direction.applyEuler( new THREE.Euler( 0, camera.rotation.y, 0, 'YXZ' ) );                    
+                    camera.position.add( direction );
+
+                }
+
+            }
+
+            function adjustTerrain() {
+
+                // ###################################
+                // mouse is pressed, deform terrain ##
+                // ###################################
+                
+                raycaster.setFromCamera( new THREE.Vector2(), camera );
+                const intersects = raycaster.intersectObjects( terrainController.castables, true );
+
+                if ( intersects.length > 0 ) {
+
+                    let intersectPoint = intersects[ 0 ];
+                    let value = ( mouse.button == 0 ) ? - 0.06 : ( mouse.button == 2 ) ? 0.06 : 0;
+                    let radius = 5;
+                    intersectPoint.object.chunk.adjust( intersectPoint.point, radius, value );
+
+
+                }
+
+            }
+
+        </script>        
+	</body>
+</html>
